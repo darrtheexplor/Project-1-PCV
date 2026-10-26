@@ -1,481 +1,254 @@
 import pygame
 import cv2
 import numpy as np
-import random
-import sys
+import os
 
-# 1. INISIALISASI GAME
 pygame.init()
 
-WIDTH, HEIGHT = 1000, 600
-screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("TENNIS - WEBCAM GLOVE GAME")
-
+# Ukuran game
+W, H = 1000, 700
+screen = pygame.display.set_mode((W, H))
+pygame.display.set_caption("Tennis Game")
 clock = pygame.time.Clock()
 
-font = pygame.font.SysFont("Arial", 28, bold=True)
-small_font = pygame.font.SysFont("Arial", 17)
-big_font = pygame.font.SysFont("Arial", 40, bold=True)
-
-# Warna
-BG = (20, 24, 38)
-COURT = (35, 125, 85)
-WHITE = (245, 245, 245)
-RED = (255, 75, 85)
-BLUE = (80, 155, 255)
-YELLOW = (255, 235, 90)
-GRAY = (155, 165, 180)
-GREEN = (70, 255, 140)
-
-# Batas lapangan
-LEFT = 60
-RIGHT = 940
-TOP = 100
-BOTTOM = 520
-NET_X = WIDTH // 2
-
-# 2. WEBCAM
-cap = cv2.VideoCapture(0)
-
-if not cap.isOpened():
-    pygame.quit()
-    raise RuntimeError(
-        "Webcam gagal dibuka. Tutup aplikasi kamera lain "
-        "atau coba ganti VideoCapture(0) menjadi VideoCapture(1)."
-    )
-
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-
-# Posisi tangan
-hand_y = HEIGHT / 2
-previous_hand_x = None
-swing_timer = 0
-hand_detected = False
-
-# Sesuaikan jika sarung tangan tidak terdeteksi
-SWING_THRESHOLD = 18
-MIN_GLOVE_AREA = 500
-
-# 3. PEMAIN DAN RAKET
-paddle_w = 24
-paddle_h = 100
-
-player = pygame.Rect(
-    110, HEIGHT // 2 - paddle_h // 2,
-    paddle_w, paddle_h
-)
-
-opponent = pygame.Rect(
-    866, HEIGHT // 2 - paddle_h // 2,
-    paddle_w, paddle_h
-)
-
-AI_SPEED = 3.8
-
-# 4. BOLA DAN SKOR
-ball_radius = 12
-
-ball_x = float(WIDTH // 2)
-ball_y = float(HEIGHT // 2)
-
-ball_vx = -5.0
-ball_vy = random.choice([-3.0, 3.0])
-
-player_score = 0
-opponent_score = 0
-
-message = "Show your RED glove to the webcam"
-
-
-def reset_ball(direction):
-    global ball_x, ball_y, ball_vx, ball_vy
-
-    ball_x = WIDTH / 2
-    ball_y = random.randint(TOP + 50, BOTTOM - 50)
-
-    ball_vx = 5.0 * direction
-    ball_vy = random.choice([-3.5, -2.5, 2.5, 3.5])
-
-
-def draw_text(text, x, y, color=WHITE, selected_font=None):
-    if selected_font is None:
-        selected_font = small_font
-
-    image = selected_font.render(text, True, color)
-    screen.blit(image, (x, y))
-
-
-def draw_racket(rect, color):
-    # Raket dibuat seperti paddle arcade
-    pygame.draw.rect(
-        screen, color, rect, border_radius=10
-    )
-
-    # Garis kecil di tengah raket
-    pygame.draw.line(
-        screen, WHITE,
-        (rect.centerx, rect.top + 15),
-        (rect.centerx, rect.bottom - 15),
-        2
-    )
-
-
-# 5. GAME LOOP
-running = True
-
-try:
-    while running:
-        clock.tick(60)
-
-        # INPUT DAN EVENT
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-
-            if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
-                    running = False
-
-                # Reset skor
-                if event.key == pygame.K_r:
-                    player_score = 0
-                    opponent_score = 0
-                    reset_ball(-1)
-
-        keys = pygame.key.get_pressed()
-
-        # BACA WEBCAM
-        success, frame = cap.read()
-        hand_detected = False
-        swing_active = False
-
-        if success:
-            # Mirror seperti cermin
-            frame = cv2.flip(frame, 1)
-
-            hsv = cv2.cvtColor(
-                frame, cv2.COLOR_BGR2HSV
-            )
-
-            # Deteksi warna merah pada HSV
-            lower1 = np.array([0, 100, 80])
-            upper1 = np.array([10, 255, 255])
-
-            lower2 = np.array([170, 100, 80])
-            upper2 = np.array([180, 255, 255])
-
-            mask1 = cv2.inRange(hsv, lower1, upper1)
-            mask2 = cv2.inRange(hsv, lower2, upper2)
-            mask = cv2.bitwise_or(mask1, mask2)
-
-            # Mengurangi noise
-            kernel = np.ones((5, 5), np.uint8)
-
-            mask = cv2.morphologyEx(
-                mask, cv2.MORPH_OPEN, kernel
-            )
-
-            mask = cv2.dilate(
-                mask, kernel, iterations=1
-            )
-
-            contours, _ = cv2.findContours(
-                mask,
-                cv2.RETR_EXTERNAL,
-                cv2.CHAIN_APPROX_SIMPLE
-            )
-
-            if contours:
-                largest = max(
-                    contours, key=cv2.contourArea
-                )
-
-                area = cv2.contourArea(largest)
-
-                if area > MIN_GLOVE_AREA:
-                    moments = cv2.moments(largest)
-
-                    if moments["m00"] != 0:
-                        cx = int(
-                            moments["m10"] / moments["m00"]
-                        )
-                        cy = int(
-                            moments["m01"] / moments["m00"]
-                        )
-
-                        hand_detected = True
-
-                        # Tandai posisi sarung tangan
-                        cv2.circle(
-                            frame, (cx, cy),
-                            12, (0, 255, 0), -1
-                        )
-
-                        # Gerakan horizontal cepat
-                        if previous_hand_x is not None:
-                            dx = cx - previous_hand_x
-
-                            if abs(dx) > SWING_THRESHOLD:
-                                swing_timer = 10
-
-                        previous_hand_x = cx
-
-                        # Posisi vertikal tangan
-                        cam_h, cam_w = frame.shape[:2]
-
-                        target_y = (
-                            TOP + paddle_h / 2
-                            + (cy / cam_h)
-                            * (BOTTOM - TOP - paddle_h)
-                        )
-
-                        # Smooth movement
-                        hand_y += (target_y - hand_y) * 0.4
-
-                        player.centery = int(hand_y)
-
-                        # Batasi raket di area kiri
-                        player.clamp_ip(
-                            pygame.Rect(
-                                LEFT, TOP,
-                                NET_X - LEFT - 20,
-                                BOTTOM - TOP
-                            )
-                        )
-
-            if swing_timer > 0:
-                swing_timer -= 1
-                swing_active = True
-
-            # Tampilkan status deteksi
-            status = (
-                "GLOVE DETECTED"
-                if hand_detected else "SEARCHING RED GLOVE"
-            )
-
-            cv2.putText(
-                frame, status, (15, 30),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (0, 255, 0) if hand_detected
-                else (0, 0, 255),
-                2
-            )
-
-            cv2.putText(
-                frame,
-                "Move vertically | Swing horizontally",
-                (15, 60),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5, (255, 255, 255), 1
-            )
-
-            cv2.imshow("Webcam - Red Glove", frame)
-            cv2.imshow("Color Detection", mask)
-
-            # Q juga bisa menutup game
-            if cv2.waitKey(1) & 0xFF == ord("q"):
-                running = False
-
-        # KONTROL CADANGAN KEYBOARD
-        # W/S untuk menggerakkan raket
-        # SPACE untuk melakukan pukulan manual
-        if keys[pygame.K_w]:
-            player.y -= 6
-
-        if keys[pygame.K_s]:
-            player.y += 6
-
-        player.clamp_ip(
-            pygame.Rect(
-                LEFT, TOP,
-                NET_X - LEFT - 20,
-                BOTTOM - TOP
-            )
+folder = os.path.dirname(os.path.abspath(__file__))
+
+# Batas lapangan (sesuaikan dengan court.png)
+LEFT, RIGHT = 120, 880
+TOP, BOTTOM = 70, 660
+BALL_R = 12
+
+# Memuat gambar
+def gambar(nama, ukuran):
+    path = os.path.join(folder, nama)
+    img = pygame.image.load(path).convert_alpha()
+    return pygame.transform.scale(img, ukuran)
+
+court = gambar("court.jpg", (W, H))
+player = gambar("player.png", (90, 110))
+opponent = gambar("opponent.png", (80, 100))
+ball_img = gambar("ball.png", (25, 25))
+
+# Posisi karakter dan bola
+px, py = W // 2, 550
+ox, oy = W // 2, 130
+bx, by = W // 2, 350
+
+vx, vy = 3, 5
+skor_kamu = 0
+skor_lawan = 0
+
+pukul = 0
+prev = None
+smooth = None
+
+# Webcam
+cam = cv2.VideoCapture(0)
+
+# Font skor
+score_font = pygame.font.SysFont("georgia", 32, bold=True)
+label_font = pygame.font.SysFont("arial", 14, bold=True)
+
+jalan = True
+
+while jalan:
+    clock.tick(60)
+
+    # Menutup game lewat tombol X jendela
+    for e in pygame.event.get():
+        if e.type == pygame.QUIT:
+            jalan = False
+
+    # Deteksi sarung tangan biru
+    ok, frame = cam.read()
+    terdeteksi = False
+
+    if ok:
+        frame = cv2.flip(frame, 1)
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+
+        mask = cv2.inRange(
+            hsv,
+            np.array([100, 90, 50]),
+            np.array([135, 255, 255])
         )
 
-        if keys[pygame.K_SPACE]:
-            swing_active = True
-
-        # GERAKAN LAWAN KOMPUTER
-        # AI mencoba mengikuti posisi bola
-        if ball_vx > 0:
-            target_ai_y = ball_y
-        else:
-            target_ai_y = HEIGHT / 2
-
-        if opponent.centery < target_ai_y - 10:
-            opponent.y += AI_SPEED
-        elif opponent.centery > target_ai_y + 10:
-            opponent.y -= AI_SPEED
-
-        opponent.clamp_ip(
-            pygame.Rect(
-                NET_X + 20, TOP,
-                RIGHT - NET_X - 20,
-                BOTTOM - TOP
-            )
+        kontur, _ = cv2.findContours(
+            mask,
+            cv2.RETR_EXTERNAL,
+            cv2.CHAIN_APPROX_SIMPLE
         )
 
-        # GERAKAN BOLA
-        ball_x += ball_vx
-        ball_y += ball_vy
+        if kontur:
+            terbesar = max(kontur, key=cv2.contourArea)
 
-        # Pantulan atas dan bawah
-        if ball_y - ball_radius <= TOP:
-            ball_y = TOP + ball_radius
-            ball_vy = abs(ball_vy)
+            if cv2.contourArea(terbesar) > 500:
+                x, y, w, h = cv2.boundingRect(terbesar)
 
-        elif ball_y + ball_radius >= BOTTOM:
-            ball_y = BOTTOM - ball_radius
-            ball_vy = -abs(ball_vy)
+                tx = 100 + (x + w / 2) / frame.shape[1] * (W - 200)
+                ty = 400 + (y + h / 2) / frame.shape[0] * 220
 
-        ball_rect = pygame.Rect(
-            int(ball_x - ball_radius),
-            int(ball_y - ball_radius),
-            ball_radius * 2,
-            ball_radius * 2
-        )
+                if smooth is None:
+                    smooth = [tx, ty]
 
-        # PUKULAN PEMAIN
-        if (
-            ball_rect.colliderect(player)
-            and ball_vx < 0
-        ):
-            if swing_active:
-                # Bola dipukul kembali ke arah lawan
-                ball_x = player.right + ball_radius
-                ball_vx = abs(ball_vx) + 0.3
+                smooth[0] += (tx - smooth[0]) * 0.4
+                smooth[1] += (ty - smooth[1]) * 0.4
 
-                # Sudut bola berdasarkan posisi tabrakan
-                offset = (
-                    ball_y - player.centery
-                ) / (paddle_h / 2)
+                px, py = smooth
+                terdeteksi = True
 
-                ball_vy = offset * 5.0
+                tangan = (x + w // 2, y + h // 2)
 
-                message = "NICE SHOT!"
+                # Gerakan cepat tangan memicu pukulan
+                if prev is not None:
+                    dx = tangan[0] - prev[0]
+                    dy = tangan[1] - prev[1]
 
+                    if (dx * dx + dy * dy) ** 0.5 > 35:
+                        pukul = 12
+
+                prev = tangan
             else:
-                # Bola menyentuh raket, tetapi belum dipukul
-                pass
+                prev = None
+        else:
+            prev = None
 
-        # Jika bola melewati pemain kiri
-        if ball_x < LEFT:
-            opponent_score += 1
-            message = "Opponent scores!"
-            reset_ball(1)
+        cv2.imshow("Deteksi Sarung Tangan", frame)
 
-        # PUKULAN LAWAN KOMPUTER
-        if (
-            ball_rect.colliderect(opponent)
-            and ball_vx > 0
-        ):
-            ball_x = opponent.left - ball_radius
-            ball_vx = -abs(ball_vx)
+    # Batas gerak pemain
+    px = max(100, min(W - 100, px))
+    py = max(400, min(H - 85, py))
 
-            offset = (
-                ball_y - opponent.centery
-            ) / (paddle_h / 2)
+    # Gerakan bola
+    bx += vx
+    by += vy
 
-            ball_vy = offset * 4.5
+    # Pantulan di sisi lapangan
+    if bx - BALL_R <= LEFT:
+        bx = LEFT + BALL_R
+        vx = abs(vx)
 
-        # Jika bola melewati lawan
-        if ball_x > RIGHT:
-            player_score += 1
-            message = "YOU SCORE!"
-            reset_ball(-1)
+    elif bx + BALL_R >= RIGHT:
+        bx = RIGHT - BALL_R
+        vx = -abs(vx)
 
-        # GAMBAR ARENA
-        screen.fill(BG)
+    # Komputer mengikuti prediksi bola
+    if vy < 0:
+        target_x = bx + vx * 8
+    else:
+        target_x = bx
 
-        pygame.draw.rect(
-            screen, COURT,
-            (LEFT, TOP, RIGHT - LEFT, BOTTOM - TOP)
-        )
+    ox += max(-5, min(5, target_x - ox))
+    oy += max(-3, min(3, 100 - oy))
+    ox = max(100, min(W - 100, ox))
 
-        # Garis batas lapangan
-        pygame.draw.rect(
-            screen, WHITE,
-            (LEFT + 30, TOP + 25,
-             RIGHT - LEFT - 60,
-             BOTTOM - TOP - 50),
-            2
-        )
+    # Ukuran area tabrakan karakter
+    PLAYER_RX, PLAYER_RY = 45, 55
+    BOT_RX, BOT_RY = 43, 50
 
-        # Garis net putus-putus
-        for y in range(TOP, BOTTOM, 22):
-            pygame.draw.line(
-                screen, WHITE,
-                (NET_X, y), (NET_X, y + 12), 3
-            )
+    # Pukulan pemain
+    if pukul > 0:
+        pukul -= 1
 
-        # Raket pemain dan lawan
-        draw_racket(player, RED)
-        draw_racket(opponent, BLUE)
+    kena_pemain = (
+        abs(bx - px) < PLAYER_RX + BALL_R
+        and abs(by - py) < PLAYER_RY + BALL_R
+    )
 
-        # Bola
-        pygame.draw.circle(
-            screen, YELLOW,
-            (int(ball_x), int(ball_y)),
-            ball_radius
-        )
+    if kena_pemain and vy > 0 and pukul > 0:
+        by = py - PLAYER_RY - BALL_R
+        vy = -abs(vy) - 1
+        vx = max(-6, min(6, (bx - px) * 0.15))
+        pukul = 0
 
-        # Efek garis bola saat bergerak
-        pygame.draw.line(
-            screen, YELLOW,
-            (int(ball_x - ball_vx * 2),
-             int(ball_y - ball_vy * 2)),
-            (int(ball_x), int(ball_y)),
-            3
-        )
+    # Pukulan komputer
+    kena_bot = (
+        abs(bx - ox) < BOT_RX + BALL_R
+        and abs(by - oy) < BOT_RY + BALL_R
+    )
 
-        # Skor
-        draw_text(
-            str(player_score), 400, 35,
-            RED, big_font
-        )
+    if kena_bot and vy < 0:
+        by = oy + BOT_RY + BALL_R
+        vy = abs(vy) + 1
+        vx = max(-5, min(5, (px - bx) * 0.015))
 
-        draw_text(
-            str(opponent_score), 560, 35,
-            BLUE, big_font
-        )
+    # Skor saat bola keluar dari batas lapangan
+    if by + BALL_R >= BOTTOM:
+        skor_lawan += 1
+        bx, by = (LEFT + RIGHT) // 2, 350
+        vx, vy = 3, 5
+        pukul = 0
 
-        draw_text(
-            "YOU", 100, 65, RED, small_font
-        )
+    elif by - BALL_R <= TOP:
+        skor_kamu += 1
+        bx, by = (LEFT + RIGHT) // 2, 350
+        vx, vy = -3, -5
+        pukul = 0
 
-        draw_text(
-            "COMPUTER", 820, 65, BLUE, small_font
-        )
+    # Gambar lapangan dan karakter
+    screen.blit(court, (0, 0))
 
-        # Status kontrol
-        control_status = (
-            "WEBCAM ACTIVE"
-            if hand_detected else "SHOW RED GLOVE"
-        )
+    screen.blit(
+        opponent,
+        opponent.get_rect(center=(int(ox), int(oy)))
+    )
 
-        draw_text(
-            control_status, 65, 545,
-            GREEN if hand_detected else GRAY,
-            small_font
-        )
+    screen.blit(
+        player,
+        player.get_rect(center=(int(px), int(py)))
+    )
 
-        draw_text(
-            "Move hand up/down | Swing sideways to hit",
-            320, 545, WHITE, small_font
-        )
+    screen.blit(
+        ball_img,
+        ball_img.get_rect(center=(int(bx), int(by)))
+    )
 
-        draw_text(
-            "SPACE: hit | W/S: move | R: reset | ESC: quit",
-            255, 570, GRAY, small_font
-        )
+    # Panel skor
+    panel = pygame.Surface((280, 76), pygame.SRCALPHA)
 
-        pygame.display.flip()
+    pygame.draw.rect(
+        panel,
+        (30, 20, 35, 210),
+        (0, 0, 280, 76),
+        border_radius=18
+    )
 
-finally:
-    cap.release()
-    cv2.destroyAllWindows()
-    pygame.quit()
-    sys.exit()
+    screen.blit(panel, (W // 2 - 140, 18))
+
+    # Label skor
+    you = label_font.render("YOU", True, (255, 190, 210))
+    cpu = label_font.render("BOT", True, (255, 190, 210))
+
+    screen.blit(you, (W // 2 - 105, 29))
+    screen.blit(cpu, (W // 2 + 55, 29))
+
+    # Angka skor
+    score_you = score_font.render(
+        str(skor_kamu), True, (255, 255, 255)
+    )
+    score_cpu = score_font.render(
+        str(skor_lawan), True, (255, 255, 255)
+    )
+    separator = score_font.render(
+        ":", True, (255, 150, 190)
+    )
+
+    screen.blit(
+        score_you,
+        score_you.get_rect(center=(W // 2 - 65, 62))
+    )
+    screen.blit(
+        separator,
+        separator.get_rect(center=(W // 2, 57))
+    )
+    screen.blit(
+        score_cpu,
+        score_cpu.get_rect(center=(W // 2 + 65, 62))
+    )
+
+    pygame.display.flip()
+
+# Tutup webcam dan game
+cam.release()
+cv2.destroyAllWindows()
+pygame.quit()
